@@ -61,7 +61,7 @@ def roster_slot(user, direction, day):
 
 def main():
     passed, rows = 0, []
-    for user, msgs, want_status, (direction, day, want_slot) in CASES:
+    for n, (user, msgs, want_status, (direction, day, want_slot)) in enumerate(CASES, 1):
         reset()
         tok = token(user)
         statuses, replies, ms = [], [], []
@@ -76,8 +76,10 @@ def main():
         got_slot = roster_slot(user, direction, day)
         ok = statuses[-1] == want_status and got_slot == want_slot
         passed += ok
-        rows.append({"user": user, "input": msgs, "expected": [want_status, want_slot],
-                     "actual": [statuses[-1], got_slot], "pass": ok, "ms": ms, "reply": replies[-1]})
+        rows.append({"id": f"heldout-{n:02d}", "input": f"{user}: " + " | ".join(msgs),
+                     "expected": {"status": want_status, "slot": want_slot},
+                     "actual": {"status": statuses[-1], "slot": got_slot, "latency_ms": ms},
+                     "pass": ok, "notes": f"Held-out phrasing, real LLM. Last reply: {replies[-1]}"})
         print(("PASS" if ok else "FAIL"), user, msgs[-1], "->", statuses[-1], got_slot, ms, flush=True)
         if not ok:
             print("      reply:", replies[-1], flush=True)

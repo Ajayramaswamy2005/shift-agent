@@ -64,3 +64,61 @@ python -m app.seed
 uvicorn app.main:app
 pytest
 ```
+
+## Design decisions
+
+```
+ POST /chat (JWT: company + employee)                     POST /manager/requests/{id}/decision (JWT: manager)
+        |                                                               |
+  per-employee advisory lock, optional Idempotency-Key                  | claim request (company-scoped)
+        |                                                               |
+  LangGraph (state checkpointed in Postgres, thread = company:employee) |
+  understand ──▶ resolve ──▶ evaluate ──▶ apply ──▶ finish              |
+   (LLM ×1)      (code)      (rules+seats)                              ▼
+                    └──▶ escalate ──▶ wait_for_manager (interrupt) ──▶ after_decision ──▶ finish
+```
+
+1. **The LLM only understands; code decides and replies.** The model turns the message (plus recent
+   turns) into `{intent, direction, date, new_time, choice}`. Picking the trip, checking rules, finding
+   seats, booking, escalating and writing the reply are plain Python. Replies are templates filled from
+   facts, so the agent cannot announce a change that did not happen.
+2. **Identity only from the token.** `company_id` and `employee_id` come from the verified JWT. The chat
+   body accepts only `message` (a `company_id` field gets a 422). Model output passes a whitelist, so
+   keys like `company_id` or `approved: true` are dropped. Every SQL query filters by the token's
+   company. A manager asking for another company's request gets 404, not 403.
+3. **Rules in code (`app/rules.py`), two kinds of violation.** `trip_started` and `in_past` are hard.
+   `cutoff` and `max_shift` are soft: the agent explains, offers the nearest slot that breaks no rule,
+   and offers to ask the manager. A broken rule never leads to a write.
+4. **Approval survives restarts.** Escalation writes a `pending_approval` row, then the graph calls
+   LangGraph `interrupt()`. The checkpoint lives in Postgres (`PostgresSaver`). The manager endpoint
+   finds the thread from the row and resumes it, re-checking the seat and time first because the cab
+   may have filled during the wait. A conditional UPDATE stops two managers deciding the same request.
+5. **Seats and double submits (bonus).** `UPDATE cabs SET booked = booked + 1 WHERE … AND booked <
+   capacity` in one transaction with the roster row locked, plus a `CHECK (booked <= capacity)`
+   constraint. A partial unique index allows one pending approval per trip. Each employee's messages
+   are serialised with an advisory lock; an `Idempotency-Key` header replays the first response.
+6. **Failures become plain sentences.** 2 s DB statement timeout, 4 s LLM timeout. Tool errors, LLM
+   errors and a cab filling mid-conversation each get a message saying what happened, that nothing was
+   changed, and what to do next. Stack traces are logged server-side, never shown.
+
+## How it stays under 4 LLM calls and 5 s p95
+
+- Only the `understand` step calls the LLM: **1 call** normally, **2** if the first output fails
+  validation or the API call errors (one repair/retry). Replies are templates: 0 calls.
+- `LLMBudget` enforces a hard cap of 4 per message in code, and each response reports `meta.llm_calls`.
+- Messages sent while a request waits for the manager use **0 calls** (status comes from the database).
+- One small-model call (Groq `openai/gpt-oss-20b`, `reasoning_effort=low`, JSON mode) plus a few
+  indexed queries. Measured with the real model: **p50 0.73 s, p95 1.15 s** (see `EVALUATION.md`).
+
+## Trade-offs
+
+- **Template replies vs LLM-written replies.** Less warm, but always true, no extra LLM call, and
+  half the latency. For a transport desk, correct beats chatty.
+- **A fixed graph instead of a free tool-calling agent.** A ReAct-style loop is more flexible, but its
+  number of LLM calls and tool order are unpredictable, so the 4-call limit could only be hoped for.
+  The fixed graph makes tool order testable (`tools-01..03` in the eval).
+- **Postgres for everything (data, checkpoints, locks, idempotency).** One dependency instead of
+  Postgres plus Redis. Redis would be faster for locks, but this load doesn't need it, and the
+  transactional guarantees matter more.
+- **The cut-off applies to the earlier of the current and the new time.** An assumption: it stops both
+  changing a trip that is about to leave and jumping onto a cab that is about to leave.
