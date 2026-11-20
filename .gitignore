@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+eval/eval_real_llm.jsonl.tmp
+.venv/
+
+# demo video is linked from the README, not committed
+*.mp4

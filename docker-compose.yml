@@ -1,0 +1,43 @@
+# One command:   docker compose up --build        -> app on http://localhost:8000
+# Tests + eval:  docker compose run --rm tests
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: shift
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shift"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  app:
+    build: .
+    env_file:
+      - path: .env
+        required: false        # put LLM_API_KEY here; never commit it
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/shift
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  tests:
+    build: .
+    profiles: ["test"]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/shift_test
+      EVAL_DATABASE_URL: postgresql://postgres:postgres@db:5432/shift_eval
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-c", "pytest -q && python -m eval.run_eval"]
+
+volumes:
+  pgdata:

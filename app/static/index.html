@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shift-Change Agent demo</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --muted:#6b7280; --line:#e3e6eb; --accent:#2f5bea; --ok:#15803d; --warn:#b45309; --err:#b91c1c; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:14px 22px; border-bottom:1px solid var(--line); background:var(--card); }
+  header h1 { margin:0; font-size:17px; }
+  header p { margin:2px 0 0; color:var(--muted); font-size:13px; }
+  main { display:grid; grid-template-columns: 1.4fr 1fr; gap:18px; padding:18px 22px; max-width:1200px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; display:flex; flex-direction:column; min-height:72vh; }
+  .bar { display:flex; gap:8px; align-items:center; padding:10px 12px; border-bottom:1px solid var(--line); }
+  .bar h2 { font-size:14px; margin:0 auto 0 0; }
+  select, input, button { font:inherit; }
+  select, input { padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
+  button { padding:6px 12px; border:0; border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; }
+  button.secondary { background:#eef1f6; color:var(--ink); }
+  button.reject { background:var(--err); }
+  button.approve { background:var(--ok); }
+  #log { flex:1; overflow:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
+  .msg { max-width:80%; padding:8px 11px; border-radius:10px; white-space:pre-wrap; }
+  .user { align-self:flex-end; background:#e8eefc; }
+  .bot { align-self:flex-start; background:#f2f3f5; }
+  .update { align-self:flex-start; background:#ecfdf3; border:1px solid #b7ebc9; }
+  .tag { display:inline-block; font-size:11px; padding:1px 6px; border-radius:99px; margin-bottom:3px; background:#e5e7eb; color:#374151; }
+  .tag.applied, .tag.approved { background:#dcfce7; color:var(--ok); }
+  .tag.rule_violation, .tag.unavailable, .tag.pending_approval, .tag.clarify { background:#fef3c7; color:var(--warn); }
+  .tag.error, .tag.rejected, .tag.declined, .tag.failed { background:#fee2e2; color:var(--err); }
+  form { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--line); }
+  form input { flex:1; }
+  #reqs { padding:12px; display:flex; flex-direction:column; gap:10px; overflow:auto; }
+  .req { border:1px solid var(--line); border-radius:8px; padding:10px; }
+  .req small { color:var(--muted); display:block; margin:3px 0 8px; }
+  .empty { color:var(--muted); padding:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Shift-Change Request Agent</h1>
+  <p>Demo page. Tokens come from the mock JWT issuer; the server takes company and employee only from the token.</p>
+</header>
+<main>
+  <section>
+    <div class="bar">
+      <h2>Employee chat</h2>
+      <select id="emp">
+        <option value="E101">E101 Priya (Acme)</option><option value="E102">E102 Rahul (Acme)</option>
+        <option value="G201">G201 Arjun (Globex)</option><option value="G202">G202 Meera (Globex)</option>
+      </select>
+    </div>
+    <div id="log"></div>
+    <form id="f"><input id="text" autocomplete="off" placeholder="e.g. Can I take the 8 PM drop tonight?"><button>Send</button></form>
+  </section>
+  <section>
+    <div class="bar">
+      <h2>Transport manager</h2>
+      <select id="mgr"><option value="M100">M100 (Acme)</option><option value="M200">M200 (Globex)</option></select>
+      <button class="secondary" id="refresh">Refresh</button>
+    </div>
+    <div id="reqs"></div>
+  </section>
+</main>
+<script>
+const tokens = {};
+const $ = (id) => document.getElementById(id);
+
+async function token(user) {
+  if (!tokens[user]) {
+    const r = await fetch("/dev/token", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({user_id: user})});
+    tokens[user] = (await r.json()).token;
+  }
+  return tokens[user];
+}
+
+function add(cls, text, status) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  if (status) { const t = document.createElement("span"); t.className = "tag " + status; t.textContent = status; d.appendChild(t); d.appendChild(document.createElement("br")); }
+  d.appendChild(document.createTextNode(text));
+  $("log").appendChild(d);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+async function loadHistory() {
+  $("log").innerHTML = "";
+  const r = await fetch("/chat/history", {headers: {Authorization: "Bearer " + await token($("emp").value)}});
+  const data = await r.json();
+  (data.messages || []).forEach(m => add(m.role === "user" ? "user" : "bot", m.content));
+}
+
+$("f").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = $("text").value.trim();
+  if (!text) return;
+  $("text").value = "";
+  add("user", text);
+  try {
+    const r = await fetch("/chat", {method: "POST", headers: {"Content-Type": "application/json", Authorization: "Bearer " + await token($("emp").value)}, body: JSON.stringify({message: text})});
+    const data = await r.json();
+    (data.updates || []).forEach(u => add("update", u, "update"));
+    add("bot", data.reply || data.detail || "No reply.", data.status);
+    loadRequests();
+  } catch (err) {
+    add("bot", "Couldn't reach the service. Check your connection and try again.", "error");
+  }
+});
+
+async function loadRequests() {
+  const r = await fetch("/manager/requests", {headers: {Authorization: "Bearer " + await token($("mgr").value)}});
+  const data = await r.json();
+  const box = $("reqs");
+  box.innerHTML = "";
+  if (!data.requests || !data.requests.length) { box.innerHTML = '<div class="empty">No requests waiting.</div>'; return; }
+  data.requests.forEach(q => {
+    const d = document.createElement("div"); d.className = "req";
+    const title = document.createElement("strong"); title.textContent = `${q.employee_name}: ${q.from_cab_id} → ${q.to_cab_id}`;
+    const why = document.createElement("small"); why.textContent = (q.violations || []).map(v => v.message).join("; ");
+    const ok = document.createElement("button"); ok.className = "approve"; ok.textContent = "Approve";
+    const no = document.createElement("button"); no.className = "reject"; no.textContent = "Reject"; no.style.marginLeft = "6px";
+    ok.onclick = () => decide(q.id, true); no.onclick = () => decide(q.id, false);
+    d.append(title, why, ok, no); box.appendChild(d);
+  });
+}
+
+async function decide(id, approved) {
+  const r = await fetch(`/manager/requests/${id}/decision`, {method: "POST", headers: {"Content-Type": "application/json", Authorization: "Bearer " + await token($("mgr").value)}, body: JSON.stringify({approved})});
+  const data = await r.json();
+  alertBox(data.employee_message || data.detail);
+  loadRequests();
+}
+
+function alertBox(text) {
+  const d = document.createElement("div"); d.className = "req"; d.textContent = "Sent to employee: " + text;
+  $("reqs").prepend(d);
+}
+
+$("emp").addEventListener("change", loadHistory);
+$("mgr").addEventListener("change", loadRequests);
+$("refresh").addEventListener("click", loadRequests);
+loadHistory(); loadRequests();
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "llm": "fake",
+  "passed": 25,
+  "total": 25,
+  "by_category": {
+    "happy_path": "1/1",
+    "cutoff_rejection": "3/3",
+    "next_option": "2/2",
+    "clarification": "2/2",
+    "cross_company_isolation": "3/3",
+    "resume_after_restart": "4/4",
+    "tool_selection": "3/3",
+    "tool_failure": "3/3",
+    "llm_failure": "2/2",
+    "concurrency_bonus": "2/2"
+  },
+  "latency_ms": {
+    "messages": 39,
+    "p50": 20.9,
+    "p95": 46.7,
+    "max": 73.9
+  },
+  "failed": []
+}

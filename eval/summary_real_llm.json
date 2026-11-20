@@ -1,0 +1,25 @@
+{
+  "llm": "real",
+  "passed": 22,
+  "total": 23,
+  "by_category": {
+    "happy_path": "1/1",
+    "cutoff_rejection": "3/3",
+    "next_option": "1/2",
+    "clarification": "2/2",
+    "cross_company_isolation": "3/3",
+    "resume_after_restart": "4/4",
+    "tool_selection": "3/3",
+    "tool_failure": "3/3",
+    "concurrency_bonus": "2/2"
+  },
+  "latency_ms": {
+    "messages": 37,
+    "p50": 731.9,
+    "p95": 1145.1,
+    "max": 1659.5
+  },
+  "failed": [
+    "rule-alt-01"
+  ]
+}
